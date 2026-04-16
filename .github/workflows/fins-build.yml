@@ -9,6 +9,7 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
+    timeout-minutes: 15
     
     strategy:
       fail-fast: false
@@ -63,7 +64,7 @@ jobs:
           echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
           
           apt update -o Acquire::ForceIPv4=true --fix-missing
-          apt install -y curl git sudo jq ninja-build software-properties-common bc wget python3-yaml
+          apt install -y curl git sudo jq ninja-build software-properties-common bc wget python3-yaml zip
 
       - name: Extract Package Name
         id: pkg_info
@@ -94,7 +95,7 @@ jobs:
           mkdir -p /github/home/.fins/logs
           nohup finsd > /github/home/.fins/logs/finsd_boot.log 2>&1 &
           sleep 3
-          fins workspace add remote
+          fins workspace add Github@${{ github.repository_owner }}@${{ github.event.repository.name }}
 
       - name: Solve Dependencies
         run: |
@@ -112,13 +113,15 @@ jobs:
           set -e
           fins build ${{ steps.pkg_info.outputs.PACKAGE_NAME }}
           mkdir -p /github/home/artifacts
-          find /github/home/.fins/install/ -maxdepth 1 ! -path /github/home/.fins/install/ ! -name "lib" ! -name "agent" ! -name "libfins_shared*" -exec cp -r {} /github/home/artifacts/ \;
+          cd /github/home/.fins/install/
+          zip -r /github/home/artifacts/Ubuntu-${{ matrix.os }}-${{ matrix.arch }}.zip . \
+            -x "lib/*" -x "agent/*" -x "libfins_shared*"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.pkg_info.outputs.PACKAGE_NAME }}-${{ matrix.os }}-${{ matrix.arch }}
-          path: /github/home/artifacts/
+          name: Ubuntu-${{ matrix.os }}-${{ matrix.arch }}
+          path: /github/home/artifacts/*.zip
 
   release:
     needs: build
@@ -130,19 +133,9 @@ jobs:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-artifacts
-
-      - name: Prepare Release Files
-        run: |
-          mkdir -p final-release
-          # Rename files to include platform info for release clarity
-          find release-artifacts -type f | while read file; do
-            # Get the directory name which contains the matrix info (e.g., vision-22.04-amd64)
-            DIR_NAME=$(basename $(dirname "$file"))
-            FILE_NAME=$(basename "$file")
-            cp "$file" "final-release/${DIR_NAME}-${FILE_NAME}"
-          done
-          ls -R final-release
+          path: final-release
+          pattern: Ubuntu-*
+          merge-multiple: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
